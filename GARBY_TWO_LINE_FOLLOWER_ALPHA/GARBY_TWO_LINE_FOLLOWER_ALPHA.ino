@@ -193,9 +193,6 @@ void right() {
 }
 
 void left() {
-  if (currentPos == POS_G && prevPos == POS_F) {
-    return;
-  }
   digitalWrite(in1, LOW);
   digitalWrite(in2, HIGH);
   digitalWrite(in3, HIGH);

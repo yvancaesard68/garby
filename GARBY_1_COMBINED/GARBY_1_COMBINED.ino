@@ -681,11 +681,11 @@ void throwSequenceDisposeStep() {
 void throwTrash() {
    delay(2000);
    Servo1.write(10);
-   delay(7000);
+   delay(10000);
    Servo1.write(160);
    delay(2000);
    Servo2.write(180);  
-   delay(7000);  
+   delay(10000);  
    Servo2.write(20);
    delay(2000); 
 }

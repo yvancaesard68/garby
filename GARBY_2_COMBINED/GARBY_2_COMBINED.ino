@@ -143,7 +143,7 @@ void setup() {
 
   Serial.begin(9600);
 
-  throwTrash();
+  testThrowTrash();
 }
 
 void loop() {
@@ -690,6 +690,18 @@ void throwTrash() {
    delay(2000);
    Servo2.write(180);  
    delay(7000);  
+   Servo2.write(20);
+   delay(2000); 
+}
+
+void testThrowTrash() {
+   delay(2000);
+   Servo1.write(10);
+   delay(2000);
+   Servo1.write(160);
+   delay(2000);
+   Servo2.write(180);  
+   delay(2000);  
    Servo2.write(20);
    delay(2000); 
 }

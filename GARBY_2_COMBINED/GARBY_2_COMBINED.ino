@@ -187,7 +187,7 @@ void eval() {
 
     showSensorValues();
 
-    if (override) {
+    if (full_capacity && override) {
       informPrepping(3);
       delay(1000);
       informPrepping(2);

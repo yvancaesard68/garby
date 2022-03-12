@@ -77,6 +77,9 @@ const int BIO_ULTRASONIC_ECHO_PIN = 27;
 const int NON_BIO_ULTRASONIC_TRIGGER_PIN = 30;
 const int NON_BIO_UTRASONIC_ECHO_PIN = 31;
 
+const int OBSTACLE_SENSOR_TRIGGER_PIN = 22;
+const int OBSTACLE_SENSOR_ECHO_PIN = 23;
+
 // Printed in the LCD;
 
 const int BIO_READINGS_MAX = 10;
@@ -102,8 +105,19 @@ float R2 = 7500.0;
 #include <ArduinoJson.h>
 String message = "";
 bool messageReady = false;
-
 bool override = false;
+
+// GSM x GPS
+#include <SoftwareSerial.h>
+SoftwareSerial sim808(11, 10); //Arduino(RX), Arduino(TX)
+char phone_no[] ="+639195443314";// replace this with your phone no.
+String data[7];
+#define DEBUG true
+String state,timegps,latitude,longitude,atmsg,msgi;
+bool bGetloc,bClrmsg=0;
+
+// HELP PROTOCOL
+long int millisWhenTransitStarted = 0;
 
 void setup() {
   // Line Follow
@@ -138,11 +152,17 @@ void setup() {
   pinMode(BIO_ULTRASONIC_ECHO_PIN, INPUT);
   pinMode(NON_BIO_ULTRASONIC_TRIGGER_PIN, OUTPUT);
   pinMode(NON_BIO_UTRASONIC_ECHO_PIN, INPUT);
+  pinMode(OBSTACLE_SENSOR_TRIGGER_PIN, OUTPUT);
+  pinMode(OBSTACLE_SENSOR_ECHO_PIN, INPUT);
 
   initLineFollower();
 
   Serial.begin(9600);
 
+  initGSM();
+
+  delay(1000);
+  
   testThrowTrash();
 }
 
@@ -162,7 +182,10 @@ bool currentlyInTransit = false;
 
 void eval() {
 
+  checkIfNeedsHelp();
+
   handleEsp(); // <- esp should be readable always
+  handleGSM();
 
   if (currentlyInTransit) {
     moveProtocol();
@@ -194,6 +217,7 @@ void eval() {
       informMoving();
       delay(1000);
       currentlyInTransit = true;
+      millisWhenTransitStarted = millis();
       // wait for a while
       // initiate throwing of trash
     }
@@ -209,6 +233,8 @@ void eval() {
     waitingForLidToClose = true;
     informLIDIsOpen();
   }
+
+
 
 }
 
@@ -243,6 +269,17 @@ void readAllSensorValues() {
   readBioSensor();
   readNonBioSensor();
   readBatterySensor();
+}
+
+long readObstacleSensor() {
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, HIGH);
+  delayMicroseconds(2);
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
+  long timedelay = pulseIn(OBSTACLE_SENSOR_ECHO_PIN, HIGH);
+  long distance1 = 0.0343 * (timedelay / 2);
+  return distance1;
 }
 
 void readBioSensor() {
@@ -406,7 +443,9 @@ void moveProtocol() {
     return;
   }
 
-  if (6 > 5) {
+  long obsReading = readObstacleSensor();
+
+  if (obsReading >= 6) {
     leftTurnIfNeeded();
     rightTurnIfNeeded();
     forwardIfNeeded();
@@ -724,4 +763,148 @@ bool pattern(int LL, int L, int C, int R, int RR) {
   int R_S = digitalRead(right_irsensor);
   int RR_S = digitalRead(Rright_irsensor);
   return (RR == RR_S && R == R_S && C == C_S && L == L_S && LL == LL_S);
+}
+
+
+// === === === === === === === 
+// GSM HANDLING
+// === === === === === === === 
+
+void initGSM() {
+  sim808.begin(9600);
+  delay(100);
+  sim808.print("AT+CMGF=1\r");//configure SIM to TEXT mode
+  delay(500);
+  sendData("AT+CGNSPWR=1",1000, DEBUG);//Turn on GPS(GNSS - Global Navigation Satellite System)
+  delay(500);
+  sendData("AT+CGNSSEQ=RMC",1000, DEBUG);
+  delay(500);
+  sendData("AT+CGPSSTATUS?",1000, DEBUG);//this will check your GPS status. A working GPS should get either a 2D or 3D fix location
+  delay(500);
+  sendMessage("Send #locate to get location. Send #clear to clear messages.");
+}
+
+void handleGSM() {
+
+  if (override && currentlyInTransit) {
+    return;
+  }
+
+  atmsg = sim808.readString();
+  if(atmsg.indexOf("+CMTI: ") >=0) {
+    msgi = atmsg.substring(atmsg.indexOf(",")+1);
+    sendData("AT+CMGR="+msgi,1000,DEBUG);
+    // delay(500);
+  }
+  if (bGetloc ==1){getGPSLocation(); bGetloc = 0;}
+  if (bClrmsg ==1){clearMessages(); bClrmsg =0;}
+}
+
+void clearMessages(){
+  sendTabData("AT+CMGD=1,4",1000,DEBUG);
+  delay(1000);
+  sendMessage("Messages cleared!");
+}
+
+void getGPSLocation(){
+  sendTabData("AT+CGNSINF",1000,DEBUG);//Get GPS info(location
+  if (state !=0) {
+    sim808.print("AT+CMGS=\"");
+    sim808.print(phone_no);
+    sim808.println("\"");
+    sim808.print("\nlatitude: "); 
+    sim808.print(latitude);
+    sim808.print("\nlongitude: "); 
+    sim808.print (longitude);
+    sim808.print("\n\n");
+    sim808.println("Open the map link below for the GPS location... ");
+    sim808.print("http://maps.google.com/maps?q=loc:");
+    sim808.print(latitude);
+    sim808.print(",");
+    sim808.print (longitude);
+    delay(50);
+    sim808.println((char)26); // End AT command with a ^Z, ASCII code 26
+    sim808.println();
+    sim808.flush();
+  }
+}
+
+void sendTabData(String command , const int timeout , boolean debug){
+  sim808.println(command);
+  long int time = millis();
+  int i = 0;
+  while((time+timeout) > millis()){
+    while(sim808.available()){
+      char c = sim808.read();
+      if (c != ',') {
+        data[i] +=c;
+        delay(2);//  delay(100);
+      } else {i++;}
+      if (i == 7){
+      delay(100);
+      goto exitL;
+      }
+    }
+  }
+exitL:
+  if (debug){
+    state = data[1];
+    timegps = data[2];
+    latitude = data[3];
+    longitude =data[4];
+    memset(data, 0, sizeof(data));
+  }
+}
+
+String sendData (String command , const int timeout ,boolean debug){
+  String response = "";
+  sim808.println(command);
+  long int time = millis();
+  int i = 0;
+  while ( (time+timeout ) > millis()){
+    while (sim808.available()){
+      char c = sim808.read();
+      response +=c;
+    }
+  }
+  if (debug){
+    if (response.indexOf("#locate")>=0){bGetloc=1;}
+    if (response.indexOf("#clear")>=0){bClrmsg=1;}
+  }
+  return response;
+}
+
+void sendMessage(String msg){
+  sim808.print("AT+CMGS=\"");
+  sim808.print(phone_no);
+  sim808.println("\"");
+  sim808.print(msg);
+  delay(50);
+  sim808.println((char)26); // End AT command with a ^Z, ASCII code 26
+  sim808.println();
+  sim808.flush();
+}
+
+// ACCELEROMETER
+
+// HELP PROTOCOL
+
+void checkIfNeedsHelp() {
+  if (override && currentlyInTransit) {
+      long int delta = millis() - millisWhenTransitStarted;
+      bool hasNotComeBackYet = delta >= 30000;
+      
+      if (hasNotComeBackYet) {
+        askForHelp();
+      }
+  } 
+}
+
+void askForHelp() {
+  fullStop();
+  override = false;
+  currentlyInTransit = false;
+
+  delay(1000);
+  sendMessage("Basi ginkawat ko ni Marcos. Halp.");
 }

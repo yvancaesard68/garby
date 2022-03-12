@@ -119,6 +119,16 @@ bool bGetloc,bClrmsg=0;
 // HELP PROTOCOL
 long int millisWhenTransitStarted = 0;
 
+// ACCELEROMETER
+#include <Adafruit_MPU6050.h>
+
+Adafruit_MPU6050 mpu;
+
+float average_x_axis_reading = 0;
+float x_axis_reading_total = 0;
+int x_axis_readings_count = 0;
+int x_delta_sustain = 0;
+
 void setup() {
   // Line Follow
   // pinMode(OBSTACLE_ULTRASONIC_TRIGGER_PIN, OUTPUT);
@@ -161,6 +171,8 @@ void setup() {
 
   initGSM();
 
+  initAccelerometer();
+
   delay(1000);
   
   testThrowTrash();
@@ -186,6 +198,7 @@ void eval() {
 
   handleEsp(); // <- esp should be readable always
   handleGSM();
+  handleAccelerometer();
 
   if (currentlyInTransit) {
     moveProtocol();
@@ -797,7 +810,7 @@ void handleGSM() {
     // delay(500);
   }
   if (bGetloc ==1){getGPSLocation(); bGetloc = 0;}
-  if (bClrmsg ==1){clearMessages(); bClrmsg =0;}
+  if (bClrmsg ==1){clearMessages(); bClrmsg = 0;}
 }
 
 void clearMessages(){
@@ -886,6 +899,38 @@ void sendMessage(String msg){
 }
 
 // ACCELEROMETER
+void initAccelerometer() {
+  mpu.begin();
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  delay(100);
+}
+
+void handleAccelerometer() {
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+
+  float x = a.acceleration.x;
+  float y = a.acceleration.y;
+  float z = a.acceleration.z;
+
+  if (x_axis_readings_count < 100) {
+    x_axis_readings_count += 1;
+    x_axis_reading_total += x;
+    average_x_axis_reading = x_axis_reading_total / x_axis_readings_count;
+    
+    float delta = max(x, average_x_axis_reading) - min(x, average_x_axis_reading);
+
+    if (delta >= 10.0) {
+      x_delta_sustain += 1;
+    }
+
+  } else {
+    x_axis_readings_count = 0;
+  }
+
+}
 
 // HELP PROTOCOL
 
@@ -893,8 +938,10 @@ void checkIfNeedsHelp() {
   if (override && currentlyInTransit) {
       long int delta = millis() - millisWhenTransitStarted;
       bool hasNotComeBackYet = delta >= 30000;
+
+      bool notUpright = x_delta_sustain >= 50;
       
-      if (hasNotComeBackYet) {
+      if (hasNotComeBackYet || notUpright) {
         askForHelp();
       }
   } 
@@ -902,6 +949,8 @@ void checkIfNeedsHelp() {
 
 void askForHelp() {
   fullStop();
+  x_delta_sustain = 0;
+  hasTurned = false;
   override = false;
   currentlyInTransit = false;
 

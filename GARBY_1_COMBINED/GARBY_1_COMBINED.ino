@@ -53,7 +53,7 @@ int DS_BACK = 2;
 int DS_PIVOTING = 3;
 int DS_END = 4;
 
-int currentPos = POS_G;
+int currentPos = POS_A;
 int prevPos = POS_F;
 
 const int SPEED_FORWARD = 120;
@@ -182,11 +182,9 @@ void eval() {
     }
 
     readAllSensorValues();
-    bool full_capacity = (bioPercentage >= DISPOSE_GABAGE_THRESHOLD) && (nonBioPercentage >= DISPOSE_GABAGE_THRESHOLD);
-
     showSensorValues();
         
-    if (full_capacity && override) {
+    if (override) {
       informPrepping(3);
       delay(1000);
       informPrepping(2);
@@ -255,7 +253,7 @@ void readBioSensor() {
   digitalWrite(BIO_ULTRASONIC_TRIGGER_PIN, LOW);
   long timedelay = pulseIn(BIO_ULTRASONIC_ECHO_PIN, HIGH);
   long distance1 = 0.0343 * (timedelay / 2);
-  int currentReading = map(distance1, 10, 2, 0, 100);
+  int currentReading = map(distance1, 11, 5, 0, 100);
   int newPercentage = constrain(currentReading, 0, 100);
   bioPercentageTotal += newPercentage;
   bioReadingsCount += 1;
@@ -274,7 +272,7 @@ void readNonBioSensor() {
   digitalWrite(NON_BIO_ULTRASONIC_TRIGGER_PIN, LOW);
   long td = pulseIn(NON_BIO_UTRASONIC_ECHO_PIN, HIGH);
   long distance2 = 0.0343 * (td / 2);
-  int currentReading = map(distance2, 10, 2, 0, 100);
+  int currentReading = map(distance2, 15, 5, 0, 100);
   int newPercentage = constrain(currentReading, 0, 100);
   nonBioPercentageTotal += newPercentage;
   nonBioReadingsCount += 1;
@@ -332,9 +330,6 @@ void handleEsp() {
     // Attempt to deserialize the message
     DeserializationError error = deserializeJson(doc,message);
 
-    //String ip = doc["ip"];
-
-    //Serial.print(ip);
     if(error) {
       Serial.print(F("deserializeJson() failed: "));
       Serial.println(error.c_str());
@@ -343,27 +338,25 @@ void handleEsp() {
     }
     if(doc["type"] == "request") {
       doc["type"] = "response";
-      // Get data from analog sensors
-      
       doc["Bio"] = bioPercentage;
       doc["NonBio"] = nonBioPercentage;
       doc["batt"] = Vin;
-     // doc["switch_on_led"] == digitalWrite(led,HIGH);
-      //doc["switch_off_led"] == digitalWrite(led,LOW);
       serializeJson(doc,Serial);
     }
 
     if(doc["type"] == "switch_on_led") {
-      override = true;
-      delay(3000);
+      throwGarbage();
     }
-
-//    if(doc["type"] == "switch_off_led") {
-//      digitalWrite(led, LOW);
-//    }
     
     messageReady = false;
   }
+}
+
+void throwGarbage() {
+    override = true;
+    bioPercentage = 0;
+    nonBioPercentage = 0;
+    delay(1000);
 }
 
 //=== === ===

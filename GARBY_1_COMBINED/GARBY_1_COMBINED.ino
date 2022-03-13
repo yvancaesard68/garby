@@ -77,9 +77,6 @@ const int BIO_ULTRASONIC_ECHO_PIN = 27;
 const int NON_BIO_ULTRASONIC_TRIGGER_PIN = 30;
 const int NON_BIO_UTRASONIC_ECHO_PIN = 31;
 
-const int OBSTACLE_SENSOR_TRIGGER_PIN = 22;
-const int OBSTACLE_SENSOR_ECHO_PIN = 23;
-
 // Printed in the LCD;
 
 const int BIO_READINGS_MAX = 10;
@@ -117,7 +114,11 @@ String state,timegps,latitude,longitude,atmsg,msgi;
 bool bGetloc,bClrmsg=0;
 
 // HELP PROTOCOL
+const int OBSTACLE_SENSOR_TRIGGER_PIN = 22;
+const int OBSTACLE_SENSOR_ECHO_PIN = 23;
+
 long int millisWhenTransitStarted = 0;
+bool needsHelp = false;
 
 // ACCELEROMETER
 #include <Adafruit_MPU6050.h>
@@ -194,11 +195,15 @@ bool currentlyInTransit = false;
 
 void eval() {
 
-  checkIfNeedsHelp();
+  if (needsHelp) {
+    return; // hold operation until the garby is reset.
+  }
 
-  handleEsp(); // <- esp should be readable always
+  handleEsp();
   handleGSM();
   handleAccelerometer();
+  
+  checkIfNeedsHelp();
 
   if (currentlyInTransit) {
     moveProtocol();
@@ -247,8 +252,6 @@ void eval() {
     informLIDIsOpen();
   }
 
-
-
 }
 
 void informLIDIsClosed() {
@@ -282,17 +285,6 @@ void readAllSensorValues() {
   readBioSensor();
   readNonBioSensor();
   readBatterySensor();
-}
-
-long readObstacleSensor() {
-  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
-  delayMicroseconds(2);
-  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, HIGH);
-  delayMicroseconds(2);
-  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
-  long timedelay = pulseIn(OBSTACLE_SENSOR_ECHO_PIN, HIGH);
-  long distance1 = 0.0343 * (timedelay / 2);
-  return distance1;
 }
 
 void readBioSensor() {
@@ -784,7 +776,7 @@ bool pattern(int LL, int L, int C, int R, int RR) {
 // === === === === === === === 
 
 void initGSM() {
-  sim808.begin(9600);
+  sim808.begin(19200);
   delay(100);
   sim808.print("AT+CMGF=1\r");//configure SIM to TEXT mode
   delay(500);
@@ -922,7 +914,7 @@ void handleAccelerometer() {
     
     float delta = max(x, average_x_axis_reading) - min(x, average_x_axis_reading);
 
-    if (delta >= 10.0) {
+    if (delta >= 0.10) {
       x_delta_sustain += 1;
     }
 
@@ -933,11 +925,21 @@ void handleAccelerometer() {
 }
 
 // HELP PROTOCOL
+long readObstacleSensor() {
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, HIGH);
+  delayMicroseconds(2);
+  digitalWrite(OBSTACLE_SENSOR_TRIGGER_PIN, LOW);
+  long timedelay = pulseIn(OBSTACLE_SENSOR_ECHO_PIN, HIGH);
+  long distance1 = 0.0343 * (timedelay / 2);
+  return distance1;
+}
 
 void checkIfNeedsHelp() {
   if (override && currentlyInTransit) {
       long int delta = millis() - millisWhenTransitStarted;
-      bool hasNotComeBackYet = delta >= 30000;
+      bool hasNotComeBackYet = delta >= 180000;
 
       bool notUpright = x_delta_sustain >= 50;
       
@@ -953,7 +955,8 @@ void askForHelp() {
   hasTurned = false;
   override = false;
   currentlyInTransit = false;
+  needsHelp = true;
 
   delay(1000);
-  sendMessage("Basi ginkawat ko ni Marcos. Halp.");
+  sendMessage("HELP PROTOCOL: Something has hindered my operation. Please check me (Garby 1).");
 }

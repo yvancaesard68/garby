@@ -128,9 +128,8 @@ Adafruit_MPU6050 mpu;
 float average_x_axis_reading = 0;
 float x_axis_reading_total = 0;
 int x_axis_readings_count = 0;
-
-const float TILT_LOWER_BOUND = 0.40;
-const float TILT_UPPER_BOUND = 1.20;
+int x_axis_ignored_readings = 0;
+const float TILT_DELTA = 0.10;
 
 void setup() {
   // Line Follow
@@ -182,7 +181,6 @@ void setup() {
 }
 
 void loop() {
-  //continueMoving();
   eval();
 }
 
@@ -202,7 +200,6 @@ void eval() {
     return; // hold operation until the garby is reset.
   }
 
-  handleAccelerometer();
   handleEsp();
 
   if (currentlyInTransit) {
@@ -331,18 +328,6 @@ void readBatterySensor() {
   Vin = Vout / (R2 / (R1 + R2));
 }
 
-void showTiltValue() {
-  lcd.setCursor(0, 1);
-  lcd.print("acc:");
-  lcd.setCursor(4,1);
-  lcd.print(x_axis_readings_count);
-
-  lcd.setCursor(10, 1);
-  lcd.print("x:");
-  lcd.setCursor(12,1);
-  lcd.print(average_x_axis_reading);
-}
-
 void showSensorValues() {
   lcd.clear();
   lcd.setCursor(0, 0);
@@ -439,6 +424,8 @@ void initLineFollower() {
 }
 
 void moveProtocol() {
+
+  handleAccelerometer();
 
   if (needsToTurn) {
     pivotToRight();
@@ -783,7 +770,6 @@ bool pattern(int LL, int L, int C, int R, int RR) {
   return (RR == RR_S && R == R_S && C == C_S && L == L_S && LL == LL_S);
 }
 
-
 // === === === === === === === 
 // GSM HANDLING
 // === === === === === === === 
@@ -918,7 +904,16 @@ void handleAccelerometer() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  float x = a.acceleration.x;
+  float x = abs(a.acceleration.x);
+
+  float delta = abs(average_x_axis_reading - x);
+
+  if ((delta >= TILT_DELTA) && (x_axis_readings_count >= 80)) {
+    x_axis_ignored_readings += 1;
+    return;
+  } else {
+    x_axis_ignored_readings = max(0, x_axis_ignored_readings - 1);
+  }
 
   x_axis_reading_total += x;
   x_axis_readings_count += 1;
@@ -929,6 +924,10 @@ void handleAccelerometer() {
     x_axis_readings_count = 1;
   }
 
+}
+
+bool checkIfTilted() {
+  return x_axis_ignored_readings >= 250;
 }
 
 // HELP PROTOCOL
@@ -944,25 +943,19 @@ long readObstacleSensor() {
 }
 
 void checkIfNeedsHelp() {
-  if (override && currentlyInTransit) {
+  // bool isMoving = override && currentlyInTransit;
+  bool isMoving = true;
+  if (isMoving) {
       long int delta = millis() - millisWhenTransitStarted;
       bool hasBeenInTransitForMoreThanThreeMinutes = delta >= 180000;
-
-      bool tilt_level = abs(average_x_axis_reading);
-      bool tiltedLeft = tilt_level <= TILT_LOWER_BOUND;
-      bool tiltedRight = tilt_level >= TILT_UPPER_BOUND;
-      bool accurate = (x_axis_readings_count >= 80);
-      bool notUpright = (accurate) && (tiltedLeft || tiltedRight);
 
       if (hasBeenInTransitForMoreThanThreeMinutes) {
         askForHelpDueToPotentialTheft();
       }
 
-      if (notUpright) {
+      if (checkIfTilted()) {
         askForHelpDueToFalling();
       }
-
-      showTiltValue();
 
   } 
 }
@@ -985,7 +978,6 @@ void askForHelpDueToPotentialTheft() {
   delay(1000);
   sendMessage("HELP PROTOCOL: Something has hindered my operation. Reason: Potential Theft. HELP MODE acitvated, send #locate to locate me.");
 }
-
 
 void askForHelpDueToFalling() {
   fullStop();

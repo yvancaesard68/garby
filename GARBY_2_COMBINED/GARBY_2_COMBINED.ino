@@ -129,7 +129,8 @@ Adafruit_MPU6050 mpu;
 float average_x_axis_reading = 0;
 float x_axis_reading_total = 0;
 int x_axis_readings_count = 0;
-int x_delta_sustain = 0;
+int x_axis_ignored_readings = 0;
+const float TILT_DELTA = 0.15;
 
 void setup() {
   // Line Follow
@@ -164,11 +165,19 @@ void setup() {
   pinMode(BIO_ULTRASONIC_ECHO_PIN, INPUT);
   pinMode(NON_BIO_ULTRASONIC_TRIGGER_PIN, OUTPUT);
   pinMode(NON_BIO_UTRASONIC_ECHO_PIN, INPUT);
+  pinMode(OBSTACLE_SENSOR_TRIGGER_PIN, OUTPUT);
+  pinMode(OBSTACLE_SENSOR_ECHO_PIN, INPUT);
 
   initLineFollower();
 
   Serial.begin(9600);
 
+  initGSM();
+
+  initAccelerometer();
+
+  delay(1000);
+  
   testThrowTrash();
 }
 
@@ -189,14 +198,11 @@ bool currentlyInTransit = false;
 void eval() {
 
   if (needsHelp) {
+    handleGSM();
     return; // hold operation until the garby is reset.
   }
 
   handleEsp();
-  handleGSM();
-  handleAccelerometer();
-  
-  checkIfNeedsHelp();
 
   if (currentlyInTransit) {
     moveProtocol();
@@ -422,6 +428,8 @@ void initLineFollower() {
 
 void moveProtocol() {
 
+  handleAccelerometer();
+
   if (needsToTurn) {
     pivotToRight();
     return;
@@ -441,7 +449,9 @@ void moveProtocol() {
     return;
   }
 
-  if (6 > 5) {
+  long obsReading = readObstacleSensor();
+
+  if (obsReading >= 6) {
     leftTurnIfNeeded();
     rightTurnIfNeeded();
     forwardIfNeeded();
@@ -449,6 +459,8 @@ void moveProtocol() {
   } else {
     stap();
   }
+
+  checkIfNeedsHelp();
 
 }
 
@@ -779,20 +791,17 @@ void initGSM() {
   delay(500);
   sendData("AT+CGPSSTATUS?",1000, DEBUG);//this will check your GPS status. A working GPS should get either a 2D or 3D fix location
   delay(500);
-  sendMessage("Send #locate to get location. Send #clear to clear messages.");
+  sendMessage("GSM INIT DONE.");
+  delay(1000);
 }
 
 void handleGSM() {
-
-  if (override && currentlyInTransit) {
-    return;
-  }
 
   atmsg = sim808.readString();
   if(atmsg.indexOf("+CMTI: ") >=0) {
     msgi = atmsg.substring(atmsg.indexOf(",")+1);
     sendData("AT+CMGR="+msgi,1000,DEBUG);
-    // delay(500);
+    delay(500);
   }
   if (bGetloc ==1){getGPSLocation(); bGetloc = 0;}
   if (bClrmsg ==1){clearMessages(); bClrmsg = 0;}
@@ -805,6 +814,11 @@ void clearMessages(){
 }
 
 void getGPSLocation(){
+
+  digitalWrite(buzzer, HIGH);
+  delay(500);
+  digitalWrite(buzzer, LOW);
+
   sendTabData("AT+CGNSINF",1000,DEBUG);//Get GPS info(location
   if (state !=0) {
     sim808.print("AT+CMGS=\"");
@@ -896,25 +910,30 @@ void handleAccelerometer() {
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
-  float x = a.acceleration.x;
-  float y = a.acceleration.y;
-  float z = a.acceleration.z;
+  float x = abs(a.acceleration.x);
 
-  if (x_axis_readings_count < 100) {
-    x_axis_readings_count += 1;
-    x_axis_reading_total += x;
-    average_x_axis_reading = x_axis_reading_total / x_axis_readings_count;
-    
-    float delta = max(x, average_x_axis_reading) - min(x, average_x_axis_reading);
+  float delta = abs(average_x_axis_reading - x);
 
-    if (delta >= 0.10) {
-      x_delta_sustain += 1;
-    }
-
+  if ((delta >= TILT_DELTA) && (x_axis_readings_count >= 80)) {
+    x_axis_ignored_readings += 1;
+    return;
   } else {
-    x_axis_readings_count = 0;
+    x_axis_ignored_readings = max(0, x_axis_ignored_readings - 1);
   }
 
+  x_axis_reading_total += x;
+  x_axis_readings_count += 1;
+  average_x_axis_reading = x_axis_reading_total/x_axis_readings_count;
+
+  if (x_axis_readings_count > 100) {
+    x_axis_reading_total = x;
+    x_axis_readings_count = 1;
+  }
+
+}
+
+bool checkIfTilted() {
+  return x_axis_ignored_readings >= 250;
 }
 
 // HELP PROTOCOL
@@ -930,26 +949,51 @@ long readObstacleSensor() {
 }
 
 void checkIfNeedsHelp() {
-  if (override && currentlyInTransit) {
+  // bool isMoving = override && currentlyInTransit;
+  bool isMoving = true;
+  if (isMoving) {
       long int delta = millis() - millisWhenTransitStarted;
-      bool hasNotComeBackYet = delta >= 180000;
+      bool hasBeenInTransitForMoreThanThreeMinutes = delta >= 180000;
 
-      bool notUpright = x_delta_sustain >= 50;
-      
-      if (hasNotComeBackYet || notUpright) {
-        askForHelp();
+      if (hasBeenInTransitForMoreThanThreeMinutes) {
+        askForHelpDueToPotentialTheft();
       }
+
+      if (checkIfTilted()) {
+        askForHelpDueToFalling();
+      }
+
   } 
 }
 
-void askForHelp() {
+void informLCDHelpMode() {
+  lcd.clear();
+  lcd.setCursor(2, 0);
+  lcd.print("HELP ME! D:");
+}
+
+void askForHelpDueToPotentialTheft() {
   fullStop();
-  x_delta_sustain = 0;
   hasTurned = false;
   override = false;
   currentlyInTransit = false;
   needsHelp = true;
 
+  informLCDHelpMode();
+
   delay(1000);
-  sendMessage("HELP PROTOCOL: Something has hindered my operation. Please check me (Garby 1).");
+  sendMessage("HELP PROTOCOL: Something has hindered my operation. Reason: Potential Theft. HELP MODE acitvated, send #locate to locate me.");
+}
+
+void askForHelpDueToFalling() {
+  fullStop();
+  hasTurned = false;
+  override = false;
+  currentlyInTransit = false;
+  needsHelp = true;
+
+  informLCDHelpMode();
+
+  delay(1000);
+  sendMessage("HELP PROTOCOL: Something has hindered my operation. Reason: I accidentally fell. HELP MODE acitvated, send #locate to locate me.");
 }
